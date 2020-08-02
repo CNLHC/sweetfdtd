@@ -2,41 +2,43 @@ package slurm
 
 /*
 #cgo LDFLAGS: -L/usr/local/lib/slurm -lslurmfull
-#include "/root.h"
+#include "root.h"
 */
 import (
 	"C"
 )
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"unsafe"
 )
 
-// func SubmitBatchJob(w http.ResponseWriter, r *http.Request) {
-// 	var slreq C.job_desc_msg_t
-// 	C.slurm_init_job_desc_msg(&slreq)
+func SubmitBatchJob(sreq Request) (*Table, error) {
+	var slreq C.job_desc_msg_t
+	C.slurm_init_job_desc_msg(&slreq)
 
-// 	obj := make(slurm.ObjectMap)
-// 	obj.Add(&slreq)
+	obj := make(ObjectMap)
+	obj.Add(&slreq)
+	if err := obj.BindRequest(sreq); err != nil {
+		return nil, err
+	}
 
-// 	obj.Run(w, r, func() {
-// 		var slres *C.submit_response_msg_t
+	var slres *C.submit_response_msg_t
 
-// 		ret := C.slurm_submit_batch_job(&slreq, &slres)
+	ret := C.slurm_submit_batch_job(&slreq, &slres)
 
-// 		if ret != 0 {
-// 			slurm.SlurmError(w, r)
-// 			return
-// 		}
+	if ret != 0 {
+		errMsg := fmt.Sprintf("Slurm error: return code %d", ret)
+		return nil, errors.New(errMsg)
+	}
 
-// 		res := slurm.GetRes(slres)
-// 		C.slurm_free_submit_response_response_msg(slres)
+	res := GetRes(slres)
+	C.slurm_free_submit_response_response_msg(slres)
 
-// 		w.Header().Set("Content-Type", "application/json")
-// 		json.NewEncoder(w).Encode(&res)
-// 	})
-// }
+	return res, nil
+
+}
 
 // func NotifyJob(w http.ResponseWriter, r *http.Request) {
 // 	opt := struct {
@@ -77,12 +79,21 @@ import (
 type LoadJobsPayload struct {
 	UpdateTime C.time_t
 	ShowFlags  C.uint16_t
+	JobId      *C.uint32_t
+	Uid        *C.uint32_t
 }
 
-func LoadJobs(Payload LoadJobsPayload) Table {
+func LoadJobs(Payload LoadJobsPayload) *Table {
 	var slres *C.job_info_msg_t
+	var ret C.int
 
-	ret := C.slurm_load_jobs(Payload.UpdateTime, &slres, Payload.ShowFlags)
+	if Payload.Uid != nil {
+		ret = C.slurm_load_job_user(&slres, *Payload.Uid, Payload.ShowFlags)
+	} else if Payload.JobId != nil {
+		ret = C.slurm_load_job(&slres, *Payload.JobId, Payload.ShowFlags)
+	} else {
+		ret = C.slurm_load_jobs(Payload.UpdateTime, &slres, Payload.ShowFlags)
+	}
 
 	if ret != 0 {
 		fmt.Printf("err")
@@ -98,7 +109,6 @@ func LoadJobs(Payload LoadJobsPayload) Table {
 	}))
 
 	res := GetRes(slres)
-
 	array := make([]*Table, count)
 	for i := 0; i < count; i++ {
 		array[i] = GetRes(&carray[i])

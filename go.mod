@@ -11,5 +11,5 @@ require (
 	github.com/modern-go/reflect2 v1.0.1 // indirect
 	github.com/xlab/c-for-go v0.0.0-20200718154222-87b0065af829 // indirect
 	golang.org/x/sys v0.0.0-20200802091954-4b90ce9b60b3 // indirect
-	google.golang.org/protobuf v1.25.0 // indirect
+	google.golang.org/protobuf v1.25.0
 )

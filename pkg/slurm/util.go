@@ -33,6 +33,8 @@ import (
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"reflect"
@@ -101,25 +103,20 @@ func (t ObjectMap) Add(data interface{}) {
 	}
 }
 
-func (t ObjectMap) Run(sreq Request, fn func()) {
+func (t ObjectMap) BindRequest(sreq Request) error {
 	var req map[string]*json.RawMessage
-	err := json.NewDecoder(sreq).Decode(&req)
-
+	err := json.Unmarshal(sreq, &req)
 	if err != nil {
-		http.Error(w, "Bad request", 400)
-		return
+		return err
 	}
-
 	for key, value := range req {
 		dst, ok := t[key]
 
 		if !ok {
-			http.Error(w, "Unknown key: "+key, 400)
-			return
+			errMsg := fmt.Sprintf("Invalid Field %s", key)
+			return errors.New(errMsg)
 		}
-
 		var err error
-
 		switch dst.Type {
 		case "*slurm._Ctype_char":
 			var s string
@@ -185,16 +182,14 @@ func (t ObjectMap) Run(sreq Request, fn func()) {
 			}
 			*(***C.char)(dst.Offset) = (**C.char)(tmp)
 		default:
-			log.Println(key, reflect.TypeOf(dst), "not supported")
+			// log.Println(key, reflect.TypeOf(dst), "not supported")
 		}
-
 		if err != nil {
-			http.Error(w, "Bad value for key: "+key, 400)
-			return
+			errMsg := fmt.Sprintf("Bad value for key: ", key)
+			return errors.New(errMsg)
 		}
 	}
-
-	fn()
+	return nil
 }
 
 func GetRes(data interface{}) *Table {
@@ -265,7 +260,6 @@ func GetRes(data interface{}) *Table {
 			}
 			ret[name] = C.GoString((*C.char)(unsafe.Pointer(v.Pointer())))
 		default:
-			log.Println(name, f.Type, "not supported")
 		}
 	}
 

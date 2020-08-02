@@ -972,7 +972,7 @@ enum ctx_keys {
 #define CR_MEMORY	0x0010	/* Memory as consumable resources. Memory is
 				 * not over-commited when selected as a CR. */
 #define CR_OTHER_CONS_RES    0x0020 /* if layering select plugins use
-				     * cons_res instead of linear (default)
+		job_desc_msg_t		     * cons_res instead of linear (default)
 				     */
 #define CR_NHC_STEP_NO 0x0040 /* On a Native Cray System don't run the
 			       * node health check after each step.
