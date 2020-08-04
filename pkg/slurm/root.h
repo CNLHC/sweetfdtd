@@ -4,6 +4,6 @@
 #include <stdlib.h>
 #include <signal.h>
 
-#include "slurm.h"
-#include "slurm/slurm_errno.h"
+#include "./slurm.h"
+#include "./slurm_errno.h"
 #endif

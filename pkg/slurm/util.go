@@ -36,11 +36,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
 	"unsafe"
+
+	logging "github.com/sweetfdtd/pkg/log"
 )
 
 type Object struct {
@@ -51,12 +52,7 @@ type ObjectMap map[string]Object
 type Table map[string]interface{}
 type Request []byte
 
-func SlurmError(w http.ResponseWriter, r *http.Request) {
-	errno := C.slurm_get_errno()
-	errno_str := "SLURM-" + strconv.Itoa(int(errno)) + " " + C.GoString(C.slurm_strerror(errno))
-	log.Println("from:", r.RemoteAddr, "request:", r.RequestURI, errno_str)
-	http.Error(w, errno_str, 500)
-}
+var logger = logging.GetLogger()
 
 func sluw_get_name(s string) string {
 	if len(s) < 2 {
@@ -103,28 +99,35 @@ func (t ObjectMap) Add(data interface{}) {
 	}
 }
 
-func (t ObjectMap) BindRequest(sreq Request) error {
+func (t ObjectMap) BindRequest(sreq Request, api_call func() (*Table, error)) (*Table, error) {
 	var req map[string]*json.RawMessage
 	err := json.Unmarshal(sreq, &req)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	logger.Debugf("BindRequest: Unmarshall result %+v", req)
 	for key, value := range req {
 		dst, ok := t[key]
 
 		if !ok {
 			errMsg := fmt.Sprintf("Invalid Field %s", key)
-			return errors.New(errMsg)
+			logger.Errorf(errMsg)
+			return nil, errors.New(errMsg)
 		}
+		logger.Debugf("BindRequest: Reflected target meta %+v for %s", dst, key)
 		var err error
 		switch dst.Type {
 		case "*slurm._Ctype_char":
 			var s string
 			err = json.Unmarshal(*value, &s)
 			tmp := C.CString(s)
+			logger.Debugf("BindRequest: Got value: %s", s)
 			*(**C.char)(dst.Offset) = tmp
 			defer C.free(unsafe.Pointer(tmp))
-		case "slurm._Ctype_uint32_t":
+
+		case "slurm._Ctype_uint",
+			"slurm._Ctype_uint32_t":
 			var i uint32
 			err = json.Unmarshal(*value, &i)
 			*(*C.uint32_t)(dst.Offset) = C.uint32_t(i)
@@ -182,14 +185,18 @@ func (t ObjectMap) BindRequest(sreq Request) error {
 			}
 			*(***C.char)(dst.Offset) = (**C.char)(tmp)
 		default:
-			// log.Println(key, reflect.TypeOf(dst), "not supported")
+			log.Println(key, reflect.TypeOf(dst), "not supported")
 		}
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad value for key: ", key)
-			return errors.New(errMsg)
+			return nil, errors.New(errMsg)
 		}
 	}
-	return nil
+	if res, err := api_call(); err != nil {
+		return nil, err
+	} else {
+		return res, nil
+	}
 }
 
 func GetRes(data interface{}) *Table {
@@ -264,4 +271,10 @@ func GetRes(data interface{}) *Table {
 	}
 
 	return &ret
+}
+
+func SlurmError() error {
+	errno := C.slurm_get_errno()
+	errno_str := "SLURM-" + strconv.Itoa(int(errno)) + " " + C.GoString(C.slurm_strerror(errno))
+	return errors.New(errno_str)
 }

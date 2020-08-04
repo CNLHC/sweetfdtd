@@ -1,0 +1,10 @@
+{
+    "go.testEnvFile": ".env",
+    "go.testEnvVars": {
+        "LD_LIBRARY_PATH": "/usr/local/lib/slurm/",
+        "TestSampleDir": "/home/cn/Project/sweet/sample"
+    },
+    "go.testFlags": [
+        "-v"
+    ]
+}

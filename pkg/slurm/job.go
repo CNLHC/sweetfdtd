@@ -9,9 +9,10 @@ import (
 )
 import (
 	"errors"
-	"fmt"
 	"reflect"
 	"unsafe"
+
+	"github.com/mitchellh/mapstructure"
 )
 
 func SubmitBatchJob(sreq Request) (*Table, error) {
@@ -20,24 +21,20 @@ func SubmitBatchJob(sreq Request) (*Table, error) {
 
 	obj := make(ObjectMap)
 	obj.Add(&slreq)
-	if err := obj.BindRequest(sreq); err != nil {
+	if res, err := obj.BindRequest(sreq, func() (*Table, error) {
+		var slres *C.submit_response_msg_t
+		ret := C.slurm_submit_batch_job(&slreq, &slres)
+		if ret != 0 {
+			return nil, SlurmError()
+		}
+		res := GetRes(slres)
+		C.slurm_free_submit_response_response_msg(slres)
+		return res, nil
+	}); err != nil {
 		return nil, err
+	} else {
+		return res, nil
 	}
-
-	var slres *C.submit_response_msg_t
-
-	ret := C.slurm_submit_batch_job(&slreq, &slres)
-
-	if ret != 0 {
-		errMsg := fmt.Sprintf("Slurm error: return code %d", ret)
-		return nil, errors.New(errMsg)
-	}
-
-	res := GetRes(slres)
-	C.slurm_free_submit_response_response_msg(slres)
-
-	return res, nil
-
 }
 
 // func NotifyJob(w http.ResponseWriter, r *http.Request) {
@@ -76,28 +73,20 @@ func SubmitBatchJob(sreq Request) (*Table, error) {
 // 	})
 // }
 
-type LoadJobsPayload struct {
-	UpdateTime C.time_t
-	ShowFlags  C.uint16_t
-	JobId      *C.uint32_t
-	Uid        *C.uint32_t
-}
-
-func LoadJobs(Payload LoadJobsPayload) *Table {
+func LoadJobs(Payload LoadJobsPayload) (JobInfoMsg, error) {
 	var slres *C.job_info_msg_t
 	var ret C.int
 
 	if Payload.Uid != nil {
-		ret = C.slurm_load_job_user(&slres, *Payload.Uid, Payload.ShowFlags)
+		ret = C.slurm_load_job_user(&slres, *(*C.uint)(Payload.Uid), Payload.ShowFlags)
 	} else if Payload.JobId != nil {
-		ret = C.slurm_load_job(&slres, *Payload.JobId, Payload.ShowFlags)
+		ret = C.slurm_load_job(&slres, *(*C.uint)(Payload.JobId), Payload.ShowFlags)
 	} else {
 		ret = C.slurm_load_jobs(Payload.UpdateTime, &slres, Payload.ShowFlags)
 	}
 
 	if ret != 0 {
-		fmt.Printf("err")
-		return nil
+		return JobInfoMsg{}, errors.New("ret is not 0")
 	}
 
 	data := unsafe.Pointer(slres.job_array)
@@ -116,7 +105,12 @@ func LoadJobs(Payload LoadJobsPayload) *Table {
 
 	(*res)["JobArray"] = array
 
+	var gores JobInfoMsg
 	C.slurm_free_job_info_msg(slres)
-	return res
+	if err := mapstructure.Decode(res, &gores); err != nil {
+		return JobInfoMsg{}, err
+	} else {
+		return gores, nil
+	}
 
 }
