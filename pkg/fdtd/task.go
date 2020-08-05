@@ -18,16 +18,19 @@ import (
 	"github.com/sweetfdtd/pkg/slurm"
 )
 
+type TaskSlurmStatus int
+type TaskFDTDStatus int
+
 const (
-	FDTDWaiting  = iota
-	FDTDTimeout  = iota
-	FDTDFailed   = iota
-	FDTDRunning  = iota
-	FDTDComplete = iota
+	FDTDWaiting  TaskFDTDStatus = iota
+	FDTDTimeout  TaskFDTDStatus = iota
+	FDTDFailed   TaskFDTDStatus = iota
+	FDTDRunning  TaskFDTDStatus = iota
+	FDTDComplete TaskFDTDStatus = iota
 )
 const (
-	SlurmJobExited  = iota
-	SlurmJobRunning = iota
+	SlurmJobExited  TaskSlurmStatus = iota
+	SlurmJobRunning TaskSlurmStatus = iota
 )
 
 var logger = logging.GetLogger()
@@ -36,33 +39,20 @@ type FDTDSlurmTask struct {
 	FSPFile string
 	JOBID   uint32
 	Status  struct {
-		Slurm     int
-		FDTD      int
+		Slurm     TaskSlurmStatus
+		FDTD      TaskFDTDStatus
 		Calculate string
 	}
-	SubmitCount uint32
-	SubmitTime  time.Time
-	Statistic   LineProgress
-	Wg          *sync.WaitGroup
-	onFDTDLine  []func(line FDTDLine)
-	RetryInSec  int
+	SubmitCount    uint32
+	SubmitTime     time.Time
+	Statistic      LineProgress
+	Wg             *sync.WaitGroup
+	onFDTDLineRecv []func(line FDTDLine)
+	RetryInSec     int
 }
 
-func (c *FDTDSlurmTask) OnFDTDLine(cb func(line FDTDLine)) {
-	c.onFDTDLine = append(c.onFDTDLine, cb)
-}
-
-func (c *FDTDSlurmTask) retry() {
-	ticker := time.NewTicker(time.Second)
-	c.RetryInSec = 5
-
-	for range ticker.C {
-		c.RetryInSec--
-		if c.RetryInSec <= 0 {
-			break
-		}
-	}
-	c.Submit()
+func (c *FDTDSlurmTask) OnFDTDLineReceived(cb func(line FDTDLine)) {
+	c.onFDTDLineRecv = append(c.onFDTDLineRecv, cb)
 }
 
 func (c *FDTDSlurmTask) Submit() {
@@ -101,7 +91,20 @@ func (c *FDTDSlurmTask) Submit() {
 		}
 	}
 }
+func (c *FDTDSlurmTask) retry() {
+	ticker := time.NewTicker(time.Second)
+	c.RetryInSec = 5
+	for range ticker.C {
+		c.RetryInSec--
+		if c.RetryInSec <= 0 {
+			break
+		}
+	}
+	c.Submit()
+}
+
 func waitfile(fp string) error {
+	logger.Infof("try to open fp:%s", fp)
 	tick := time.NewTicker(time.Millisecond * 200)
 	var max_retries = 2000
 	for _ = range tick.C {
@@ -122,91 +125,111 @@ func waitfile(fp string) error {
 	return nil
 }
 
+func (c *FDTDSlurmTask) setSlurmStatus(status TaskSlurmStatus) {
+	c.Status.Slurm = status
+}
+
+func (c *FDTDSlurmTask) setFDTDStatus(status TaskFDTDStatus) {
+	c.Status.FDTD = status
+
+	if status == FDTDFailed || status == FDTDTimeout {
+		c.Wg.Add(1)
+		go c.retry()
+	}
+}
+
 func (c *FDTDSlurmTask) updateStatus() {
 	defer c.Wg.Done()
 	local_fields := logrus.Fields{
 		"fsp":   c.FSPFile,
 		"JobID": c.JOBID,
 	}
-	if res, err := c.getJobInfo(); err != nil {
+	var (
+		res  slurm.JobInfoMsg
+		file *os.File
+		err  error
+	)
+
+	if res, err = c.getJobInfo(); err != nil {
 		logger.WithFields(local_fields).Errorf("can not find slurm job ")
-		c.Status.Slurm = SlurmJobExited
-	} else {
-		logger.WithFields(local_fields).Infof("start monitoring")
-		c.Status.Slurm = SlurmJobRunning
-		cwd := res.JobArray[0].WorkDir
-		stdout := res.JobArray[0].StdOut
-		fp := path.Join(cwd+"/", stdout)
-		fp = strings.Replace(fp, "%j", strconv.Itoa(int(c.JOBID)), 1)
-		logger.WithFields(local_fields).Infof("try to open fp:%s", fp)
+		c.setSlurmStatus(SlurmJobExited)
+		return
+	}
 
-		c.Status.FDTD = FDTDWaiting
-		if err := waitfile(fp); err != nil {
-			c.Status.FDTD = FDTDTimeout
-			logger.
-				WithError(err).
-				WithFields(local_fields).
-				Error("can not open stdout file")
-			return
-		}
+	c.setSlurmStatus(SlurmJobRunning)
+	c.setFDTDStatus(FDTDWaiting)
+	logger.WithFields(local_fields).Infof("start monitoring")
 
-		if file, err := os.Open(fp); err != nil {
-			logger.WithFields(logrus.Fields{
-				"fsp":   c.FSPFile,
-				"JobID": c.JOBID,
-				"fp":    fp,
-				"err":   err.Error(),
-			}).Errorf("error open stdout file")
-			c.Status.FDTD = FDTDFailed
-			return
-		} else {
-			c.Status.FDTD = FDTDRunning
-			defer file.Close()
-			ticker := time.NewTicker(200 * time.Millisecond)
-			reader := bufio.NewReader(file)
-		loop:
-			for range ticker.C {
-				if line, err := reader.ReadString('\n'); err != nil {
-					if err != io.EOF {
-						logger.WithFields(logrus.Fields{
-							"fsp":   c.FSPFile,
-							"JobID": c.JOBID,
-							"err":   err.Error(),
-						}).Error("read error")
-					}
-				} else {
-					fdtdline := ParseStdOutLine(line)
-					logger.WithFields(logrus.Fields{
-						"fsp":   c.FSPFile,
-						"JobID": c.JOBID,
-					}).Infof("read line %s", line)
-					for _, fn := range c.onFDTDLine {
-						if fn != nil {
-							fn(fdtdline)
-						}
-					}
-					switch fdtdline.Type {
-					case LineTypeComplete:
-						c.Status.FDTD = FDTDComplete
-						break loop
-					case LineTypePlain:
-						if fdtdline.PlainError == ErrorLicense {
-							c.Wg.Add(1)
-							c.Status.FDTD = FDTDFailed
-							go c.retry()
-							break loop
-						}
-						break
-					case LineTypeUpdate:
-						c.Statistic = fdtdline.Update
-						break
-					case LineTypeStatus:
-						c.Status.Calculate = fdtdline.Status
-						break
-					}
-				}
+	//get stdout file
+	cwd := res.JobArray[0].WorkDir
+	stdout := res.JobArray[0].StdOut
+	fp := path.Join(cwd+"/", stdout)
+	fp = strings.Replace(fp, "%j", strconv.Itoa(int(c.JOBID)), 1)
+	if err := waitfile(fp); err != nil {
+		c.setFDTDStatus(FDTDTimeout)
+		logger.
+			WithError(err).
+			WithFields(local_fields).
+			Error("can not open stdout file")
+		return
+	}
+
+	// try to open file
+	if file, err = os.Open(fp); err != nil {
+		logger.WithFields(logrus.Fields{
+			"fsp":   c.FSPFile,
+			"JobID": c.JOBID,
+			"fp":    fp,
+			"err":   err.Error(),
+		}).Errorf("error open stdout file")
+		c.setFDTDStatus(FDTDFailed)
+		return
+	}
+
+	defer file.Close()
+	c.setFDTDStatus(FDTDRunning)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	reader := bufio.NewReader(file)
+loop:
+	for range ticker.C {
+		var line string
+		if line, err = reader.ReadString('\n'); err != nil {
+			if err != io.EOF {
+				logger.WithFields(logrus.Fields{
+					"fsp":   c.FSPFile,
+					"JobID": c.JOBID,
+					"err":   err.Error(),
+				}).Error("read error")
+				return
 			}
 		}
+
+		fdtdline := ParseStdOutLine(line)
+		//exec hook function
+		for _, fn := range c.onFDTDLineRecv {
+			if fn != nil {
+				fn(fdtdline)
+			}
+		}
+
+		switch fdtdline.Type {
+		case LineTypeComplete:
+			c.setFDTDStatus(FDTDComplete)
+			break loop
+		case LineTypePlain:
+			if fdtdline.PlainError == ErrorLicense {
+				c.setFDTDStatus(FDTDFailed)
+				return
+			}
+			break
+		case LineTypeUpdate:
+			c.Statistic = fdtdline.Update
+			break
+		case LineTypeStatus:
+			c.Status.Calculate = fdtdline.Status
+			break
+		}
+
 	}
 }
 
