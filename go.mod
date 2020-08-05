@@ -6,6 +6,7 @@ require (
 	github.com/gin-gonic/gin v1.6.3
 	github.com/gizak/termui/v3 v3.1.0
 	github.com/go-playground/validator/v10 v10.3.0 // indirect
+	github.com/godoctor/godoctor v0.0.0-20200702010311-8433dcb3dc61 // indirect
 	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/json-iterator/go v1.1.10 // indirect
 	github.com/mitchellh/mapstructure v1.3.3

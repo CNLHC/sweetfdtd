@@ -40,6 +40,11 @@ type FDTDSlurmTask struct {
 	SubmitTime  time.Time
 	Statistic   LineProgress
 	Wg          *sync.WaitGroup
+	onFDTDLine  []func(line FDTDLine)
+}
+
+func (c *FDTDSlurmTask) OnFDTDLine(cb func(line FDTDLine)) {
+	c.onFDTDLine = append(c.onFDTDLine, cb)
 }
 
 func (c *FDTDSlurmTask) Submit() {
@@ -143,7 +148,11 @@ func (c *FDTDSlurmTask) updateStatus() {
 					}
 				} else {
 					fdtdline := ParseStdOutLine(line)
-					logger.Debugf("%+v", fdtdline)
+					for _, fn := range c.onFDTDLine {
+						if fn != nil {
+							fn(fdtdline)
+						}
+					}
 					switch fdtdline.Type {
 					case LineTypeComplete:
 						c.Status.FDTD = FDTDComplete

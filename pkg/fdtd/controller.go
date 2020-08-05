@@ -9,7 +9,7 @@ import (
 )
 
 type FDTDTaskSet struct {
-	Tasks []FDTDSlurmTask
+	Tasks []*FDTDSlurmTask
 	wg    sync.WaitGroup
 }
 
@@ -19,7 +19,7 @@ func (c *FDTDTaskSet) BuildFromPath(fp string) error {
 	} else {
 		for _, file := range files {
 			c.Tasks = append(c.Tasks,
-				FDTDSlurmTask{
+				&FDTDSlurmTask{
 					FSPFile: path.Join(fp, file),
 					Wg:      &c.wg,
 				})
