@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,13 +19,15 @@ import (
 )
 
 const (
+	FDTDWaiting  = iota
+	FDTDTimeout  = iota
 	FDTDFailed   = iota
 	FDTDRunning  = iota
 	FDTDComplete = iota
 )
 const (
-	SlurmJobExited  = "Exit"
-	SlurmJobRunning = "Running"
+	SlurmJobExited  = iota
+	SlurmJobRunning = iota
 )
 
 var logger = logging.GetLogger()
@@ -32,7 +36,7 @@ type FDTDSlurmTask struct {
 	FSPFile string
 	JOBID   uint32
 	Status  struct {
-		Slurm     string
+		Slurm     int
 		FDTD      int
 		Calculate string
 	}
@@ -41,10 +45,24 @@ type FDTDSlurmTask struct {
 	Statistic   LineProgress
 	Wg          *sync.WaitGroup
 	onFDTDLine  []func(line FDTDLine)
+	RetryInSec  int
 }
 
 func (c *FDTDSlurmTask) OnFDTDLine(cb func(line FDTDLine)) {
 	c.onFDTDLine = append(c.onFDTDLine, cb)
+}
+
+func (c *FDTDSlurmTask) retry() {
+	ticker := time.NewTicker(time.Second)
+	c.RetryInSec = 5
+
+	for range ticker.C {
+		c.RetryInSec--
+		if c.RetryInSec <= 0 {
+			break
+		}
+	}
+	c.Submit()
 }
 
 func (c *FDTDSlurmTask) Submit() {
@@ -54,9 +72,11 @@ func (c *FDTDSlurmTask) Submit() {
 		"Script":      "#!/bin/bash\n /root/test_util",
 		"UserId":      os.Getuid(),
 		"GroupId":     os.Getegid(),
-		"StdOut":      "test.out",
+		"StdOut":      "test-%j.out",
 		"Name":        "ptest",
 		"WorkDir":     cwd,
+		"ExcNodes":    "c2",
+		"MaxCpus":     1,
 		"Environment": os.Environ(),
 		"EnvSize":     len(os.Environ()),
 	})
@@ -65,6 +85,7 @@ func (c *FDTDSlurmTask) Submit() {
 	if res, err := slurm.SubmitBatchJob(payload); err != nil {
 		c.Status.Slurm = SlurmJobExited
 		logger.Errorf("can not submit job %v", err)
+		c.Wg.Done()
 	} else {
 		c.Status.Slurm = SlurmJobRunning
 		if r, ok := (*res)["JobId"]; ok {
@@ -77,13 +98,12 @@ func (c *FDTDSlurmTask) Submit() {
 				"JobID": c.JOBID,
 				"res":   fmt.Sprintf("%+v", *res),
 			}).Errorf("No job id returned")
-
 		}
 	}
 }
 func waitfile(fp string) error {
 	tick := time.NewTicker(time.Millisecond * 200)
-	var max_retries = 20
+	var max_retries = 2000
 	for _ = range tick.C {
 		if _, err := os.Stat(fp); err != nil {
 			if max_retries <= 0 {
@@ -108,22 +128,28 @@ func (c *FDTDSlurmTask) updateStatus() {
 		"fsp":   c.FSPFile,
 		"JobID": c.JOBID,
 	}
-
 	if res, err := c.getJobInfo(); err != nil {
 		logger.WithFields(local_fields).Errorf("can not find slurm job ")
 		c.Status.Slurm = SlurmJobExited
 	} else {
 		logger.WithFields(local_fields).Infof("start monitoring")
-		c.Status.Slurm = "Normal"
+		c.Status.Slurm = SlurmJobRunning
 		cwd := res.JobArray[0].WorkDir
 		stdout := res.JobArray[0].StdOut
 		fp := path.Join(cwd+"/", stdout)
+		fp = strings.Replace(fp, "%j", strconv.Itoa(int(c.JOBID)), 1)
+		logger.WithFields(local_fields).Infof("try to open fp:%s", fp)
+
+		c.Status.FDTD = FDTDWaiting
 		if err := waitfile(fp); err != nil {
+			c.Status.FDTD = FDTDTimeout
 			logger.
 				WithError(err).
 				WithFields(local_fields).
 				Error("can not open stdout file")
+			return
 		}
+
 		if file, err := os.Open(fp); err != nil {
 			logger.WithFields(logrus.Fields{
 				"fsp":   c.FSPFile,
@@ -132,7 +158,9 @@ func (c *FDTDSlurmTask) updateStatus() {
 				"err":   err.Error(),
 			}).Errorf("error open stdout file")
 			c.Status.FDTD = FDTDFailed
+			return
 		} else {
+			c.Status.FDTD = FDTDRunning
 			defer file.Close()
 			ticker := time.NewTicker(200 * time.Millisecond)
 			reader := bufio.NewReader(file)
@@ -148,6 +176,10 @@ func (c *FDTDSlurmTask) updateStatus() {
 					}
 				} else {
 					fdtdline := ParseStdOutLine(line)
+					logger.WithFields(logrus.Fields{
+						"fsp":   c.FSPFile,
+						"JobID": c.JOBID,
+					}).Infof("read line %s", line)
 					for _, fn := range c.onFDTDLine {
 						if fn != nil {
 							fn(fdtdline)
@@ -159,7 +191,10 @@ func (c *FDTDSlurmTask) updateStatus() {
 						break loop
 					case LineTypePlain:
 						if fdtdline.PlainError == ErrorLicense {
+							c.Wg.Add(1)
 							c.Status.FDTD = FDTDFailed
+							go c.retry()
+							break loop
 						}
 						break
 					case LineTypeUpdate:

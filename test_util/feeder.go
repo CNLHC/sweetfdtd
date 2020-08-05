@@ -2,12 +2,13 @@ package main
 
 import (
 	"bufio"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
 )
 
-const template = `
+const normal_template = `
 <addcolumn><column><title>Max time remaining</title><type>text</type><tagname>time</tagname></column><column><title>Autoshutoff level</title><type>text</type><tagname>shutoff</tagname></column><column><title>Progress</title><type>progress</type><tagname>progress</tagname></column></addcolumn>
 <propertylist><property>canBePaused</property><property>canQuitAndSave</property></propertylist>
 <status>UPDATE_MODES</status>
@@ -56,15 +57,62 @@ const template = `
 <simComplete/>
 <complete/>
 `
+const error_template = `
+<addcolumn><column><title>Max time remaining</title><type>text</type><tagname>time</tagname></column><column><title>Autoshutoff level</title><type>text</type><tagname>shutoff</tagname></column><column><title>Progress</title><type>progress</type><tagname>progress</tagname></column></addcolumn>
+<propertylist><property>canBePaused</property><property>canQuitAndSave</property></propertylist>
+c06b02n08(process 0): Your license settings don't appear to be configured.
+Please open the Launcher or the Configure License program to reconfigure your license settings.
+c06b02n08(process 0): License error: The license settings have not been configured<p>The flexNet error code is: -4, which corresponds to the error:</p></p>Licensed number of users already reached.
+Feature:       FDTD_Solutions_engine
+License path:  27011@11.3.11.1:27011@localhost:
+FlexNet Licensing error:-4,132.  System Error: 2 "No such file or directory"</p><p>Please see <a href=https://kb.lumerical.com/redirect/fwd3.html>Troubleshooting guide</a> for help resolving this issue.</p>
+c06b02n08(process 0): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 10): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 11): Error: there was a failure with the license. Process number: 0 had this error
+<complete/>
+c06b02n08(process 16): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 25): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 17): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 27): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 26): Error: there was a failure with the license. Process number: 0 had this errorc06b02n08(process 9): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 15): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 21): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 23): Error: there was a failure with the license. Process number: 0 had this error
+
+c06b02n08(process 8): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 12): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 19): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 1): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 4): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 3): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 14): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 5): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 7): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 13): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 22): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 18): Error: there was a failure with the license. Process number: 0 had this errorc06b02n08(process 2): Error: there was a failure with the license. Process number: 0 had this error
+
+c06b02n08(process 24): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 20): Error: there was a failure with the license. Process number: 0 had this error
+c06b02n08(process 6): Error: there was a failure with the license. Process number: 0 had this error
+`
 
 func main() {
+	var template string
+	rand.Seed(time.Now().Unix())
+
+	if rand.Intn(100) >= 50 {
+		template = normal_template
+	} else {
+		template = error_template
+	}
 	lines := strings.Split(template, "\n")
 	writer := bufio.NewWriter(os.Stdout)
 
 	for _, line := range lines {
 		writer.WriteString(line + "\n")
 		writer.Flush()
-		time.Sleep(time.Millisecond * 300)
+		time.Sleep(time.Millisecond * time.Duration(0+rand.Intn(100)))
 	}
 
 }
