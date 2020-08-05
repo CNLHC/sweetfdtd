@@ -3,10 +3,16 @@ package fdtd
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
+	"path"
+	"sync"
 	"time"
 
-	"github.com/prometheus/common/log"
+	"github.com/sirupsen/logrus"
+	logging "github.com/sweetfdtd/pkg/log"
 	"github.com/sweetfdtd/pkg/slurm"
 )
 
@@ -20,6 +26,8 @@ const (
 	SlurmJobRunning = "Running"
 )
 
+var logger = logging.GetLogger()
+
 type FDTDSlurmTask struct {
 	FSPFile string
 	JOBID   uint32
@@ -31,51 +39,115 @@ type FDTDSlurmTask struct {
 	SubmitCount uint32
 	SubmitTime  time.Time
 	Statistic   LineProgress
+	Wg          *sync.WaitGroup
 }
 
 func (c *FDTDSlurmTask) Submit() {
-	type Res struct {
-		Scripts string
-	}
-	payload, _ := json.Marshal(Res{
-		Scripts: "#!/bin/bash\n#SBATCH -o stest%j.out\n hostname",
+	type Req map[string]interface{}
+	cwd, _ := os.Getwd()
+	payload, _ := json.Marshal(Req{
+		"Script":      "#!/bin/bash\n /root/test_util",
+		"UserId":      os.Getuid(),
+		"GroupId":     os.Getegid(),
+		"StdOut":      "test.out",
+		"Name":        "ptest",
+		"WorkDir":     cwd,
+		"Environment": os.Environ(),
+		"EnvSize":     len(os.Environ()),
 	})
-
 	c.SubmitTime = time.Now()
 	c.SubmitCount++
 	if res, err := slurm.SubmitBatchJob(payload); err != nil {
 		c.Status.Slurm = SlurmJobExited
-		log.Errorf("can not submit job")
+		logger.Errorf("can not submit job %v", err)
 	} else {
 		c.Status.Slurm = SlurmJobRunning
 		if r, ok := (*res)["JobId"]; ok {
-			c.JOBID = r.(uint32)
-			log.Errorf("submit JOB, ID: %d", r)
+			c.JOBID = uint32(r.(uint))
+			logger.Infof("submit JOB, ID: %d", r)
+			go c.updateStatus()
+		} else {
+			logger.WithFields(logrus.Fields{
+				"fsp":   c.FSPFile,
+				"JobID": c.JOBID,
+				"res":   fmt.Sprintf("%+v", *res),
+			}).Errorf("No job id returned")
+
 		}
-		go c.updateStatus()
 	}
+}
+func waitfile(fp string) error {
+	tick := time.NewTicker(time.Millisecond * 200)
+	var max_retries = 20
+	for _ = range tick.C {
+		if _, err := os.Stat(fp); err != nil {
+			if max_retries <= 0 {
+				return errors.New("Wait for stdout file timeout")
+			}
+			if os.IsNotExist(err) {
+				max_retries--
+				continue
+			} else {
+				return err
+			}
+		} else {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (c *FDTDSlurmTask) updateStatus() {
+	defer c.Wg.Done()
+	local_fields := logrus.Fields{
+		"fsp":   c.FSPFile,
+		"JobID": c.JOBID,
+	}
+
 	if res, err := c.getJobInfo(); err != nil {
-		log.Warnf("can not find slurm job %d", c.JOBID)
+		logger.WithFields(local_fields).Errorf("can not find slurm job ")
 		c.Status.Slurm = SlurmJobExited
 	} else {
+		logger.WithFields(local_fields).Infof("start monitoring")
 		c.Status.Slurm = "Normal"
-		if file, err := os.Open(res.JobArray[0].StdOut); err != nil {
+		cwd := res.JobArray[0].WorkDir
+		stdout := res.JobArray[0].StdOut
+		fp := path.Join(cwd+"/", stdout)
+		if err := waitfile(fp); err != nil {
+			logger.
+				WithError(err).
+				WithFields(local_fields).
+				Error("can not open stdout file")
+		}
+		if file, err := os.Open(fp); err != nil {
+			logger.WithFields(logrus.Fields{
+				"fsp":   c.FSPFile,
+				"JobID": c.JOBID,
+				"fp":    fp,
+				"err":   err.Error(),
+			}).Errorf("error open stdout file")
 			c.Status.FDTD = FDTDFailed
 		} else {
 			defer file.Close()
+			ticker := time.NewTicker(200 * time.Millisecond)
 			reader := bufio.NewReader(file)
-			for {
+		loop:
+			for range ticker.C {
 				if line, err := reader.ReadString('\n'); err != nil {
-					break
+					if err != io.EOF {
+						logger.WithFields(logrus.Fields{
+							"fsp":   c.FSPFile,
+							"JobID": c.JOBID,
+							"err":   err.Error(),
+						}).Error("read error")
+					}
 				} else {
 					fdtdline := ParseStdOutLine(line)
+					logger.Debugf("%+v", fdtdline)
 					switch fdtdline.Type {
 					case LineTypeComplete:
 						c.Status.FDTD = FDTDComplete
-						break
+						break loop
 					case LineTypePlain:
 						if fdtdline.PlainError == ErrorLicense {
 							c.Status.FDTD = FDTDFailed

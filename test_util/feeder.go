@@ -1,9 +1,19 @@
-<addcolumn><column><title>max time remaining</title><type>text</type><tagname>time</tagname></column><column><title>autoshutoff level</title><type>text</type><tagname>shutoff</tagname></column><column><title>progress</title><type>progress</type><tagname>progress</tagname></column></addcolumn>
-<propertylist><property>canbepaused</property><property>canquitandsave</property></propertylist>
-<status>update_modes</status>
-<status>mesh_start</status>
-<status>build_sources_start</status>
-<status>build_sources_finish</status>
+package main
+
+import (
+	"bufio"
+	"os"
+	"strings"
+	"time"
+)
+
+const template = `
+<addcolumn><column><title>Max time remaining</title><type>text</type><tagname>time</tagname></column><column><title>Autoshutoff level</title><type>text</type><tagname>shutoff</tagname></column><column><title>Progress</title><type>progress</type><tagname>progress</tagname></column></addcolumn>
+<propertylist><property>canBePaused</property><property>canQuitAndSave</property></propertylist>
+<status>UPDATE_MODES</status>
+<status>MESH_START</status>
+<status>BUILD_SOURCES_START</status>
+<status>BUILD_SOURCES_FINISH</status>
 0.0491584,20 mins, 1 secs,1,
 2.08104,3 mins, 44 secs,0.970258,
 <update><progress>3.65411</progress><time>2 mins, 39 secs</time><shutoff>1.01144</shutoff></update>
@@ -41,7 +51,20 @@
 <update><progress>83.8806</progress><time>16 secs</time><shutoff>0.991594</shutoff></update>
 <update><progress>92.2703</progress><time>7 secs</time><shutoff>0.9873</shutoff></update>
 <update><progress>100</progress><time>0 secs</time><shutoff>0.980719</shutoff></update>
-<status>write_start</status>
-<status>write_finish</status>
-<simcomplete/>
+<status>WRITE_START</status>
+<status>WRITE_FINISH</status>
+<simComplete/>
 <complete/>
+`
+
+func main() {
+	lines := strings.Split(template, "\n")
+	writer := bufio.NewWriter(os.Stdout)
+
+	for _, line := range lines {
+		writer.WriteString(line + "\n")
+		writer.Flush()
+		time.Sleep(time.Millisecond * 300)
+	}
+
+}

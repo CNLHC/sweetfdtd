@@ -35,7 +35,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"reflect"
 	"strconv"
 	"strings"
@@ -185,7 +184,7 @@ func (t ObjectMap) BindRequest(sreq Request, api_call func() (*Table, error)) (*
 			}
 			*(***C.char)(dst.Offset) = (**C.char)(tmp)
 		default:
-			log.Println(key, reflect.TypeOf(dst), "not supported")
+			logger.Error(key, reflect.TypeOf(dst), "not supported")
 		}
 		if err != nil {
 			errMsg := fmt.Sprintf("Bad value for key: ", key)

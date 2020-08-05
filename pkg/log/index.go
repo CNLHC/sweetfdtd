@@ -10,7 +10,7 @@ var logger = logrus.New()
 
 func init() {
 	logger.SetOutput(os.Stdout)
-	logger.SetLevel(logrus.DebugLevel)
+	logger.SetLevel(logrus.InfoLevel)
 }
 
 func GetLogger() *logrus.Logger {
